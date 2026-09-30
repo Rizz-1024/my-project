@@ -1,4 +1,4 @@
-## 1. High-Level Summary
+## 1. Summary
 
 ### What This Program Does
 This program provides a direct, on-chain execution client for the **Raydium AMM V4** decentralized exchange inside **LiteSVM** (an in-process Solana Virtual Machine). It allows developers to execute two-way token swaps (SOL $\leftrightarrow$ USDC) against real Mainnet market liquidity.
