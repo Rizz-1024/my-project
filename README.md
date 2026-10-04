@@ -57,50 +57,25 @@ To eliminate mocked balances and fake Python math, LiteSVM directly executes off
 [![Solana](https://img.shields.io/badge/Solana-Mainnet--Beta-black?logo=solana)](https://solana.com)
 [![Engine](https://img.shields.io/badge/Engine-LiteSVM-blueviolet)](https://github.com/jito-foundation/litesvm)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://python.org)
-[![Git Flow](https://img.shields.io/badge/Branches-Multi--Branch%20Sprint-orange)](https://github.com/Rizz-1024/Internship_Project_Sep_2026/branches)
+[![GitLab](https://img.shields.io/badge/GitLab-Multi--Branch%20Sprint-orange?logo=gitlab)](https://gitlab.com/mister_octopus/scorpion_iinternship_project/-/branches)
 
 ---
 
 ## Visuals
 
-### System Architecture & Cross-Program Invocation (CPI) Flow
+### System Architecture & Cross-Program Invocation Flow
 
 ```mermaid
 graph TD
-    subgraph Host["Host Environment (Python Client)"]
-        User["Signer Keypair (~/.config/solana/id.json)"]
-        Client["early-code/raydium.py (Execution Engine)"]
-    end
-
-    subgraph LiteSVM["LiteSVM In-Process Solana VM Runtime"]
-        subgraph Bytecode["Loaded Program Bytecode (.so)"]
-            AMM["Raydium AMM V4 (675kPX9...)"]
-            SPL["SPL Token Program (TokenkegQ...)"]
-            SRM["Serum DEX / OpenBook (srmqPvy...)"]
-        end
-
-        subgraph Accounts["Hydrated Mainnet State Snapshots (.json)"]
-            PoolState["raydium_pool.json (Fees & Vault Pointers)"]
-            CoinVault["coin_vault.json (157,470 WSOL Reserve)"]
-            PCVault["pc_vault.json (19,158,073 USDC Reserve)"]
-            Orderbook["open_orders / market / bids / asks .json"]
-        end
-
-        subgraph UserATAs["Trader Associated Token Accounts (ATAs)"]
-            UserWSOL["Trader WSOL ATA (Byte Offset 64..72)"]
-            UserUSDC["Trader USDC ATA (Byte Offset 64..72)"]
-        end
-    end
-
-    User -->|Signs Transaction| Client
-    Client -->|Dispatches Instruction Index 9| AMM
-    AMM -->|Validates Orderbook State| Orderbook
-    AMM -->|Evaluates Constant Product x * y = k| PoolState
-    AMM -->|Cross-Program Invocation (CPI)| SPL
-    SPL -->|Debits 2.0 SOL| UserWSOL
-    SPL -->|Credits 2.0 SOL| CoinVault
-    SPL -->|Debits 242.71 USDC| PCVault
-    SPL -->|Credits 242.71 USDC| UserUSDC
+    User[Trader Signer Keypair] -->|Signs Transaction| Client[Execution Client: raydium.py]
+    Client -->|Instruction Index 9| AMM[Raydium AMM V4 Program]
+    AMM -->|Validates Liquidity Depth| Orderbook[Serum DEX Orderbook]
+    AMM -->|Constant Product Invariant| PoolState[Raydium Pool State]
+    AMM -->|Cross Program Invocation| SPL[SPL Token Program]
+    SPL -->|Debits 2.0 SOL| UserWSOL[Trader WSOL Account]
+    SPL -->|Credits 2.0 SOL| CoinVault[SOL Vault: 157470 SOL]
+    SPL -->|Debits 242.71 USDC| PCVault[USDC Vault: 19158073 USDC]
+    SPL -->|Credits 242.71 USDC| UserUSDC[Trader USDC Account]
 ```
 
 ---
@@ -108,7 +83,7 @@ graph TD
 ## Installation
 
 ### Prerequisites & System Packages
-Before setting up the Solana and Anchor toolchains on Ubuntu / WSL2, ensure all required build tools and libraries are installed:
+Updates package repositories and installs fundamental Linux build utilities, C/C++ compilers, linkers, LLVM toolchains, and SSL cryptographic headers required to compile Rust crates and Solana binaries:
 
 ```bash
 sudo apt update && sudo apt install -y \
@@ -124,74 +99,104 @@ sudo apt update && sudo apt install -y \
 ```
 
 ### 1. Install Rust Toolchain
-Solana smart contracts and LiteSVM bindings compile using Rust:
-
+Downloads and runs the official Rustup installer, configuring the `rustc` compiler and `cargo` package manager in non-interactive mode:
 ```bash
-# Install rustup and cargo
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source $HOME/.cargo/env
+```
 
-# Verify Rust installation
+Loads Cargo environment variables into the current terminal session so that `rustc` and `cargo` commands become immediately accessible without needing a terminal restart:
+```bash
+source $HOME/.cargo/env
+```
+
+Queries the active Rust toolchain to verify that both the compiler and package manager are installed correctly and ready for use:
+```bash
 rustc --version
 cargo --version
 ```
 
 ### 2. Install Solana CLI Toolsuite
-Install the official Solana / Agave command-line tools:
-
+Downloads and executes the official Anza/Agave installer script to install the Solana CLI tools and BPF compilation engine:
 ```bash
-# Download and install Solana CLI (stable release)
 sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+```
 
-# Add Solana to PATH
+Temporarily appends the Solana active release binary folder to your current session's `PATH` variable for immediate terminal access:
+```bash
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-echo 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"' >> ~/.bashrc
+```
 
-# Verify Solana CLI installation
+Permanently writes the Solana binary path into your user's `~/.bashrc` configuration file so that the `solana` command is automatically available in every future terminal window:
+```bash
+echo 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"' >> ~/.bashrc
+```
+
+Queries the Solana executable to verify that the CLI binary is properly linked and displays the installed version:
+```bash
 solana --version
 ```
 
 ### 3. Install Anchor CLI (via Anchor Version Manager - AVM)
-Anchor is the standard framework for Solana smart contract development:
-
+Downloads and compiles the Anchor Version Manager (`avm`) from the official GitHub repository using Cargo, locking dependencies to prevent build breakage:
 ```bash
-# Install Anchor Version Manager (AVM)
 cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+```
 
-# Install and activate the latest Anchor CLI
+Uses the newly installed AVM tool to fetch and compile the latest stable release of the Anchor smart contract development framework:
+```bash
 avm install latest
-avm use latest
+```
 
-# Verify Anchor installation
+Activates the compiled Anchor release as your global default development version:
+```bash
+avm use latest
+```
+
+Checks the active Anchor binary version to confirm successful compilation and system linkage:
+```bash
 anchor --version
 ```
 
 ### 4. Clone the Repository
-Clone the project repository to your local workspace:
-
+Clones the complete project repository from GitLab onto your local disk, including all branches, code files, and Mainnet fixture snapshots:
 ```bash
-git clone https://github.com/Rizz-1024/Internship_Project_Sep_2026.git
-cd Internship_Project_Sep_2026
+git clone https://gitlab.com/mister_octopus/scorpion_iinternship_project.git
+```
+
+Changes your current working directory to navigate inside the cloned project root folder:
+```bash
+cd scorpion_iinternship_project
 ```
 
 ### 5. Setup Python Environment & LiteSVM
-Initialize the virtual environment and install `solders` with native `LiteSVM` engine bindings:
-
+Creates an isolated Python virtual environment named `solana_env` in your user home directory to avoid package version collisions with system Python:
 ```bash
-# Create and activate Python virtual environment
 python3 -m venv ~/solana_env
-source ~/solana_env/bin/activate
+```
 
-# Upgrade pip and install Solders (Solana SDK & LiteSVM)
+Activates the virtual environment so that subsequent Python packages are installed strictly inside this sandbox:
+```bash
+source ~/solana_env/bin/activate
+```
+
+Upgrades Python's package management tool (`pip`) to the newest release to support modern pre-compiled wheel distributions:
+```bash
 pip install --upgrade pip
+```
+
+Installs `solders` (v0.21.0), the Solana Python SDK providing C-bindings for Solana primitives and the in-process LiteSVM runtime engine:
+```bash
 pip install solders==0.21.0
 ```
 
 ### 6. Generate Developer Keypair
-Create a local Solana keypair for transaction signing:
-
+Generates a new ed25519 Solana cryptographic keypair without a BIP39 passphrase prompt and writes it to Solana's default config path:
 ```bash
 solana-keygen new --no-bip39-passphrase -o ~/.config/solana/id.json
+```
+
+Reads the keypair file and outputs its corresponding base58-encoded public key (wallet address) to the terminal:
+```bash
 solana address
 ```
 
@@ -281,8 +286,8 @@ This repository follows a structured sprint workflow:
 - `fix/<fix-name>` — Bug fixes and patches.
 
 ### Development Guidelines
-1. Pull request titles and commit messages must strictly adhere to the [Conventional Commits](https://www.conventionalcommits.org/) specification (e.g. `feat: ...`, `fix: ...`, `docs: ...`).
-2. All simulations and tests must execute cleanly with exit code 0 before PR submission.
+1. Merge request (MR) titles and commit messages must strictly adhere to the [Conventional Commits](https://www.conventionalcommits.org/) specification (e.g. `feat: ...`, `fix: ...`, `docs: ...`).
+2. All simulations and tests must execute cleanly with exit code 0 before MR submission.
 3. `CHANGELOG.md` must be updated under `[Unreleased]` for any user-facing functional changes.
 
 ---
