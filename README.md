@@ -1,6 +1,6 @@
 # Name
 
-**Solana Market Research & Selection (Step 1 & Step 2)**
+**Solana Market Research & Selection**
 
 ---
 
@@ -16,7 +16,7 @@ Designing automated market makers (AMMs), arbitrage algorithms, and on-chain liq
 
 ---
 
-### Step 1: Researched Solana Trading Venues
+### Researched Solana Trading Venues
 
 #### 1. JTX (Jito Tip Exchange / MEV Bundles)
 - **Program ID:** `T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt`
@@ -44,7 +44,7 @@ Designing automated market makers (AMMs), arbitrage algorithms, and on-chain liq
 
 ---
 
-### Step 2: Comparative Evaluation Matrix
+### Comparative Evaluation Matrix
 
 | Trading Venue | Model Architecture | SBF / Bytecode Availability | Settlement Latency | LiteSVM Simulation Viability | Primary Arbitrage Role |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -55,7 +55,7 @@ Designing automated market makers (AMMs), arbitrage algorithms, and on-chain liq
 
 ---
 
-### Step 2: Market Selection Decision & Technical Rationale
+### Market Selection Decision & Technical Rationale
 
 ### Primary Selected Market: **Orca Whirlpools (CLMM)**
 *Configured in `early-code/markets.py` as the primary venue for concentrated liquidity modeling, paired with Raydium AMM V4 for multi-venue price disparity arbitrage.*
