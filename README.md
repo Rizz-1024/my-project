@@ -117,12 +117,6 @@ Description     : Tick-based concentrated liquidity pool with deterministic sing
 Ready for Step 4 (LiteSVM Alice & Bob trading script).
 ```
 
-### 2. Review Detailed Selection Documentation
-Inspect the technical markdown documentation detailing the architectural trade-offs:
-```bash
-cat early-code/MARKET_SELECTION.md
-```
-
 ---
 
 ## Authors and acknowledgment
