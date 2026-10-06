@@ -1,120 +1,326 @@
 # Name
 
-**Solana Market Research & Selection**
+**LiteSVM Trading & AMM Simulation**
 
 ---
 
 ## Description
 
-This module documents the technical evaluation and architectural selection of decentralized trading venues on the Solana blockchain for local Solana Virtual Machine (LiteSVM) simulation, arbitrage loop modeling, and oracle vulnerability testing.
+This module implements an in-process, cryptographic-grade simulation and execution testing framework for decentralized exchange (DEX) trading protocols on the Solana blockchain using **LiteSVM**.
 
 ### Background & Context
-Designing automated market makers (AMMs), arbitrage algorithms, and on-chain liquidators on Solana requires deep architectural insight into how liquidity venues execute smart contract instructions, manage state serialization, handle compute unit (CU) limits, and enforce transaction atomicity:
-- **Execution Overhead:** Different DEX architectures impose distinct compute unit profiles and account locking constraints.
-- **Settlement Latency:** Traditional decentralized orderbooks rely on asynchronous two-phase cranking, whereas modern Solana venues utilize instant atomic settlement or tick-based execution.
-- **Simulation Fidelity:** For local testing in **LiteSVM**, candidate venues must provide deterministic BPF smart contract bytecode (`.so`) that can be executed offline without live RPC validators or off-chain keeper networks.
+Testing decentralized trading algorithms, market makers, and arbitrage logic on Solana typically introduces significant engineering friction:
+- **Mainnet Deployments:** Incur real capital risk, network transaction fees, and adverse price slippage.
+- **Devnet Environments:** Feature stale, abandoned liquidity pools, missing peripheral protocol accounts, and intermittent RPC node unreliability.
+- **Off-Chain Mocking (Python / TypeScript):** Relies on mathematical approximations that bypass low-level Berkeley Packet Filter (BPF) runtime panics, account serialization quirks, compute unit limits, and Cross-Program Invocation (CPI) constraints.
+
+This module resolves these limitations by executing trades inside **LiteSVM** (an in-process Solana Virtual Machine runtime). Instead of approximating trades via off-chain mathematical formulas, the suite loads official compiled Solana smart contract bytecode (`.so`) and hydrates the VM ledger with serialized account state snapshots (`.json`) dumped directly from Solana Mainnet-Beta. This delivers microsecond-level local execution benchmarks with zero network latency, zero transaction fees, and 100% cryptographic and state fidelity to Mainnet.
 
 ---
 
-### Researched Solana Trading Venues
+### Architecture & Capabilities
 
-#### 1. JTX (Jito Tip Exchange / MEV Bundles)
-- **Program ID:** `T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt`
-- **Architecture:** Searcher bundle relayer and tip payment account infrastructure.
-- **Mechanism:** Enables atomic transaction multi-packs that execute sequentially without intermediate state insertion or public mempool front-running risk.
-- **Relevance:** Essential for constructing sandwich-resistant arbitrage loops, tip distribution calculations, and priority fee optimization.
+#### Part A: Standalone Constant-Product Pool Simulation (`early-code/simulate_trade.py`)
+- Models multi-party trading between independent trader wallets (**Alice & Bob**).
+- Implements strict integer-scaled token precision ($10^9$ lamports for SOL, $10^6$ units for USDC) to eliminate floating-point rounding divergence.
+- Enforces constant-product invariant preservation ($x \cdot y = k$) with explicit 30 bps pool fee accounting and real-time vault balance auditing.
 
-#### 2. Orca Whirlpools (Concentrated Liquidity AMM - CLMM)
-- **Program ID:** `whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc`
-- **Architecture:** Concentrated liquidity market maker dividing pool capital into discrete tick arrays (inspired by Uniswap v3).
-- **Mechanism:** Liquidity providers allocate capital within explicit price intervals ($p_{min}, p_{max}$). Trades execute through localized tick arrays via deterministic single-instruction swaps (`swap` / `swap_v2`).
-- **Relevance:** Enables precise simulation of price slippage across liquidity depths, tick crossing dynamics, fee tier structures (1 bps to 100 bps), and multi-hop pool rebalancing.
-
-#### 3. Phoenix (Ellipsis Labs - Central Limit Orderbook)
-- **Program ID:** `PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY`
-- **Architecture:** Fully on-chain, non-cranked Central Limit Order Book (CLOB).
-- **Mechanism:** Unlike legacy DEXs (e.g., Serum v3), Phoenix settles matching orders directly within the taker's transaction, eliminating asynchronous request queues and keeper cranking.
-- **Relevance:** Critical for evaluating microsecond-level atomic arbitrage against deterministic limit order depths.
-
-#### 4. Raydium AMM V4 (Constant Product AMM & Hybrid Orderbook)
-- **Program ID:** `675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8`
-- **Architecture:** High-volume hybrid liquidity protocol combining constant product invariant pools ($x \cdot y = k$) with Serum/OpenBook order routing.
-- **Mechanism:** Manages automated market making with 25 bps liquidity fees and routes residual order depths through external market accounts.
-- **Relevance:** Deep liquidity and predictable pool math make it a baseline benchmark for cross-market price disparities and atomic arbitrage swaps.
+#### Part B: Direct On-Chain Raydium V4 Execution Client (`early-code/raydium.py`)
+- Executes directly against official compiled smart contracts: `raydium_amm.so`, `spl_token.so`, and `serum_dex.so`.
+- Hydrates real Mainnet liquidity from 11 account state fixtures holding **157,470.6015 SOL** and **19,158,073.74 USDC**.
+- Deterministically derives SPL Associated Token Accounts (ATAs) and provisions rent-exempt balances (`2,039,280` lamports for 165 bytes).
+- Assembles raw binary instruction payloads for Raydium Swap (Instruction Index 9) with exact 18-account metadata configurations (`is_signer`, `is_writable`).
+- Reads post-trade token balances directly from SPL Token byte layouts (offsets 64..72) and measures exact compute units consumed (~18,552 CUs).
+- Enforces dynamic slippage tolerance bounds (`min_amount_out`) and 25 bps pool fee deductions.
 
 ---
 
-### Comparative Evaluation Matrix
+### Program Binaries (`.so`) & Mainnet Account Fixtures (`.json`)
+To eliminate mocked balances and fake Python math, LiteSVM directly executes official BPF shared object binaries against frozen Mainnet account snapshots:
 
-| Trading Venue | Model Architecture | SBF / Bytecode Availability | Settlement Latency | LiteSVM Simulation Viability | Primary Arbitrage Role |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Orca Whirlpools** | Concentrated Liquidity (CLMM) | Public Open Source (`orca-so/whirlpools`) | Single-Tx Atomic | **Optimal** (Deterministic tick math) | Price impact & slippage exploration |
-| **Phoenix** | Central Limit Orderbook (CLOB) | Public BPF (`Ellipsis-Labs/phoenix-v1`) | Single-Tx Instant (No Cranks) | **High** (Compact memory footprint) | Maker/taker spread arbitrage |
-| **Raydium AMM V4** | Constant Product ($x \cdot y = k$) | Verified Mainnet Bytecode (`.so`) | Single-Tx Swap | **Proven** (18-account swap instruction) | Core liquidity baseline |
-| **Jito / JTX** | Atomic Bundle / Tip Engine | Public Interface & Client | Block Engine Sequencing | **High** (Composable with DEXs) | Frontrun/backrun bundle protection |
-
----
-
-### Market Selection Decision & Technical Rationale
-
-### Primary Selected Market: **Orca Whirlpools (CLMM)**
-*Configured in `early-code/markets.py` as the primary venue for concentrated liquidity modeling, paired with Raydium AMM V4 for multi-venue price disparity arbitrage.*
-
-#### Technical Rationale:
-1. **Capital-Efficient Slippage Modeling:** Concentrated liquidity pools permit exact calculation of price movement across discrete tick boundaries, allowing AI arbitrage agents to discover non-trivial routing opportunities.
-2. **Deterministic Single-Instruction Swaps:** Unlike multi-phase orderbooks that require asynchronous settlement, Whirlpool swaps execute synchronously in a single instruction with zero off-chain keeper dependencies.
-3. **Reproducible Test Fixtures:** Whirlpool bytecode and account structures can be loaded into LiteSVM memory without mock RPC servers or network connection latency.
-4. **Seamless Simulation Pipeline:** Provides clean programmatic interfaces for creating token mints, seeding pool reserves, initializing trader wallets (Alice & Bob), and tracking post-trade balances.
+| File Location | Type | Address / Program ID | Functional Role in LiteSVM |
+| :--- | :--- | :--- | :--- |
+| `fixtures/raydium_amm.so` | Program Binary | `675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8` | Core Raydium AMM V4 contract; executes swap math, fee deduction (25 bps), and slippage checks. |
+| `fixtures/spl_token.so` | Program Binary | `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` | Official SPL Token program; executes balance debits, credits, and ATA initialization. |
+| `fixtures/serum_dex.so` | Program Binary | `srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX` | Serum DEX / OpenBook program; required by Raydium for hybrid orderbook state validation. |
+| `fixtures/raydium_pool.json` | Account Snapshot | `58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2` | SOL/USDC pool state with status flags, fee rates, and vault pointers. |
+| `fixtures/coin_vault.json` | Account Snapshot | `DQyrAcCrDXQ7NeoqGgDCZwBvWDcYmFCjSb9JtteuvPpz` | Live WSOL token vault holding **157,470.6015 SOL** real reserves. |
+| `fixtures/pc_vault.json` | Account Snapshot | `HLmqeL62xR1QoZ1HKKbXRrdN1p3phKpxRMb2VVopvBBz` | Live USDC token vault holding **19,158,073.74 USDC** real reserves. |
+| `fixtures/open_orders.json` | Account Snapshot | `HRk9CMrpq7Jn9sh7mzxE8CChHG8dneX9TXE7j13bPR72` | Raydium tracking account for orders placed on the Serum orderbook. |
+| `fixtures/target_orders.json` | Account Snapshot | `CZza3Ej4Mc58MnxWA385itKujMYYiRwBfZLq7wn99u9g` | Target rebalancing account used by Raydium to manage Serum order depths. |
+| `fixtures/market.json` | Account Snapshot | `9wFFyRfZBsuAha4YcuxcXLKwMxJR43S7fPfQLusDBzvT` | Serum SOL/USDC market configuration account. |
+| `fixtures/bids.json` / `asks.json` | Account Snapshots | Orderbook Slabs | Serum buy/sell orderbook slab trees required for market state verification. |
+| `fixtures/event_q.json` | Account Snapshot | Event Queue | Serum trade execution and settlement queue account. |
+| `fixtures/market_coin_vault.json` | Account Snapshot | Serum WSOL Vault | Serum internal token vault referenced in swap account inputs. |
+| `fixtures/market_pc_vault.json` | Account Snapshot | Serum USDC Vault | Serum internal quote vault referenced in swap account inputs. |
 
 ---
 
 ## Badges
 
-[![Solana](https://img.shields.io/badge/Solana-Market%20Research-black?logo=solana)](https://solana.com)
-[![Step](https://img.shields.io/badge/Milestone-Step%201%20%26%202-success)](https://gitlab.com/mister_octopus/scorpion_iinternship_project)
+[![Solana](https://img.shields.io/badge/Solana-Mainnet--Beta-black?logo=solana)](https://solana.com)
+[![Engine](https://img.shields.io/badge/Engine-LiteSVM-blueviolet)](https://github.com/jito-foundation/litesvm)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://python.org)
-[![GitLab](https://img.shields.io/badge/GitLab-feat%2Fmarket--selection-orange?logo=gitlab)](https://gitlab.com/mister_octopus/scorpion_iinternship_project/-/tree/feat/market-selection)
+[![GitLab](https://img.shields.io/badge/GitLab-feat%2Flitesvm--simulation-orange?logo=gitlab)](https://gitlab.com/mister_octopus/scorpion_iinternship_project/-/tree/feat/litesvm-simulation)
 
 ---
 
 ## Visuals
 
-### Solana Market Taxonomy & Simulation Architecture
+### System Architecture & Cross-Program Invocation Flow
 
 ```mermaid
 graph TD
-    Venues[Solana Decentralized Trading Venues] --> CLMM[Concentrated Liquidity AMM: Orca Whirlpools]
-    Venues --> CLOB[Central Limit Orderbook: Phoenix]
-    Venues --> AMM[Hybrid Constant Product: Raydium AMM V4]
-    Venues --> MEV[Atomic Bundling: Jito JTX]
+    User[Trader Signer Keypair] -->|Signs Transaction| Client[Execution Client: raydium.py]
+    Client -->|Instruction Index 9| AMM[Raydium AMM V4 Program]
+    AMM -->|Validates Liquidity Depth| Orderbook[Serum DEX Orderbook]
+    AMM -->|Constant Product Invariant| PoolState[Raydium Pool State]
+    AMM -->|Cross Program Invocation| SPL[SPL Token Program]
+    SPL -->|Debits 2.0 SOL| UserWSOL[Trader WSOL Account]
+    SPL -->|Credits 2.0 SOL| CoinVault[SOL Vault: 157470 SOL]
+    SPL -->|Debits 242.71 USDC| PCVault[USDC Vault: 19158073 USDC]
+    SPL -->|Credits 242.71 USDC| UserUSDC[Trader USDC Account]
+```
 
-    CLMM -->|Tick Arrays & Capital Efficiency| Selected[Selected Primary Focus: Step 2]
-    AMM -->|Continuous Math x*y=k| Selected
-    Selected -->|Compiled Bytecode .so & Account State .json| LiteSVM[LiteSVM Execution Harness: Step 4]
-    LiteSVM -->|Simulate Alice & Bob Trades| Arbitrage[Step 5: Multi-Market Arbitrage Simulation]
+---
+
+## Installation
+
+### Prerequisites & System Packages
+Updates package repositories and installs fundamental Linux build utilities, C/C++ compilers, linkers, LLVM toolchains, and SSL cryptographic headers required to compile Rust crates and Solana binaries:
+
+```bash
+sudo apt update && sudo apt install -y \
+    build-essential \
+    pkg-config \
+    libudev-dev \
+    llvm \
+    clang \
+    cmake \
+    libssl-dev \
+    curl \
+    git
+```
+
+### 1. Install Rust Toolchain
+Downloads and runs the official Rustup installer, configuring the `rustc` compiler and `cargo` package manager in non-interactive mode:
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+```
+
+Loads Cargo environment variables into the current terminal session so that `rustc` and `cargo` commands become immediately accessible without needing a terminal restart:
+```bash
+source $HOME/.cargo/env
+```
+
+Queries the active Rust toolchain to verify that both the compiler and package manager are installed correctly and ready for use:
+```bash
+rustc --version
+cargo --version
+```
+
+### 2. Install Solana CLI Toolsuite
+Downloads and executes the official Anza/Agave installer script to install the Solana CLI tools and BPF compilation engine:
+```bash
+sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+```
+
+Temporarily appends the Solana active release binary folder to your current session's `PATH` variable for immediate terminal access:
+```bash
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+```
+
+Permanently writes the Solana binary path into your user's `~/.bashrc` configuration file so that the `solana` command is automatically available in every future terminal window:
+```bash
+echo 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"' >> ~/.bashrc
+```
+
+Queries the Solana executable to verify that the CLI binary is properly linked and displays the installed version:
+```bash
+solana --version
+```
+
+### 3. Install Anchor CLI (via Anchor Version Manager - AVM)
+Downloads and compiles the Anchor Version Manager (`avm`) from the official GitHub repository using Cargo, locking dependencies to prevent build breakage:
+```bash
+cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+```
+
+Uses the newly installed AVM tool to fetch and compile the latest stable release of the Anchor smart contract development framework:
+```bash
+avm install latest
+```
+
+Activates the compiled Anchor release as your global default development version:
+```bash
+avm use latest
+```
+
+Checks the active Anchor binary version to confirm successful compilation and system linkage:
+```bash
+anchor --version
+```
+
+### 4. Clone the Repository
+Clones the complete project repository from GitLab onto your local disk, including all branches, code files, and Mainnet fixture snapshots:
+```bash
+git clone https://gitlab.com/mister_octopus/scorpion_iinternship_project.git
+```
+
+Changes your current working directory to navigate inside the cloned project root folder:
+```bash
+cd scorpion_iinternship_project
+```
+
+### 5. Setup Python Environment & LiteSVM
+Creates an isolated Python virtual environment named `solana_env` in your user home directory to avoid package version collisions with system Python:
+```bash
+python3 -m venv ~/solana_env
+```
+
+Activates the virtual environment so that subsequent Python packages are installed strictly inside this sandbox:
+```bash
+source ~/solana_env/bin/activate
+```
+
+Upgrades Python's package management tool (`pip`) to the newest release to support modern pre-compiled wheel distributions:
+```bash
+pip install --upgrade pip
+```
+
+Installs `solders` (v0.21.0), the Solana Python SDK providing C-bindings for Solana primitives and the in-process LiteSVM runtime engine:
+```bash
+pip install solders==0.21.0
+```
+
+### 6. Generate Developer Keypair
+Generates a new ed25519 Solana cryptographic keypair without a BIP39 passphrase prompt and writes it to Solana's default config path:
+```bash
+solana-keygen new --no-bip39-passphrase -o ~/.config/solana/id.json
+```
+
+Reads the keypair file and outputs its corresponding base58-encoded public key (wallet address) to the terminal:
+```bash
+solana address
 ```
 
 ---
 
 ## Usage
 
-### 1. Inspect Researched Market Configurations
-Executes the market selection definition module to inspect and verify active venue parameters:
+### 1. Direct Raydium AMM V4 On-Chain Swap (LiteSVM)
+
+Execute a direct on-chain swap from **SOL to USDC**:
 ```bash
-python early-code/markets.py
+python early-code/raydium.py --direction sol-to-usdc --amount 2.0
 ```
 
 **Expected Terminal Output:**
 ```text
-==================================================
- Solana Market Selection (Step 1 & Step 2)
-==================================================
-Selected Market : Orca Whirlpools
-Program ID      : whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc
-Market Type     : Concentrated Liquidity AMM (CLMM)
-Description     : Tick-based concentrated liquidity pool with deterministic single-instruction swaps.
-==================================================
-Ready for Step 4 (LiteSVM Alice & Bob trading script).
+--- Raydium AMM V4 Direct On-Chain Execution ---
+Signer Wallet:      GzdXR3tkDMgjVvzVCXj1YvCqW6VnSGSrk4wJ3Sn6LqNt
+Raydium Pool:       58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2
+SOL Vault Reserve:  157,470.6015 SOL
+USDC Vault Reserve: 19,158,073.74 USDC
+
+Executing Swap:     2.0000 SOL -> USDC
+Expected Output:    242.7112 USDC
+Slippage Limit:     241.4976 USDC (50 bps)
+Status:             Confirmed by Raydium smart contract
+Compute Units:      18,552
+
+Output Received:    +242.7112 USDC
+Updated SOL Vault:  157,472.6015 SOL
+Updated USDC Vault: 19,157,831.03 USDC
+```
+
+Execute a reverse swap from **USDC to SOL**:
+```bash
+python early-code/raydium.py --direction usdc-to-sol --amount 200.0
+```
+
+---
+
+### 2. Standalone Constant-Product Pool Simulation
+
+Simulate multi-party token swaps between Alice and Bob:
+```bash
+python early-code/simulate_trade.py
+```
+
+**Expected Terminal Output:**
+```text
+--- Wallets Created ---
+Alice: HyMc4PDVQzFFid3dDKmAtV75YJwWJxkcpZoW43iBLChJ
+Bob:   Htac7QZJ6xmj9LniMvguGQDwJvVPevzCcHJeYQZbydpA
+
+--- Market Initialized ---
+Pool Address: 6tGrs88CypXt3XE8jzFj4F8wRiwSzvvV5YwF7EFnNyAZ
+Initial Reserves: 100.0000 SOL, 15000.00 USDC
+
+--- Initial Balances ---
+Alice: 10.0000 SOL, 100.00 USDC
+Bob:   2.0000 SOL, 1500.00 USDC
+
+--- Executing Trades ---
+Alice swapped 2.00 SOL -> 293.25 USDC
+Bob swapped 500.00 USDC -> 3.3440 SOL
+
+--- Final Balances ---
+Alice: 8.0000 SOL, 393.25 USDC
+Bob:   5.3440 SOL, 1000.00 USDC
+Market Pool Reserves: 98.6560 SOL, 15206.75 USDC
+```
+
+---
+
+### 3. Smart Contract Bytecode Verification (`test_litesvm_load.py`)
+
+This diagnostic test boots an isolated LiteSVM instance and verifies that the compiled SBF/BPF smart contract binaries (`spl_token.so`, `raydium_cp_swap.so`, and `raydium_amm.so`) load cleanly into VM memory without ELF header or linkage corruption. Its utility is to isolate the execution engine from transaction data, ensuring that the low-level smart contract bytecode is valid before running swaps. Use this script as an initial smoke test whenever updating or recompiling program binaries:
+
+```bash
+python early-code/test_litesvm_load.py
+```
+
+**Expected Terminal Output:**
+```text
+✓ Loaded SPL Token Program successfully!
+✓ Loaded Raydium CPMM Program successfully!
+✓ Loaded Raydium AMM V4 Program successfully!
+```
+
+---
+
+### 4. Mainnet Account State Hydration (`test_account_load.py`)
+
+This test verifies that raw account snapshots captured from Solana Mainnet-Beta (`coin_vault.json`) can be deserialized and written directly into LiteSVM's account ledger using `svm.set_account`. Its utility is to confirm that 64-bit lamport balances, owner program IDs, rent-exemption epochs, and base64-encoded token vault data byte arrays hydrate with 100% cryptographic precision. Use this script to confirm state snapshot integrity before executing transactions that depend on frozen Mainnet liquidity:
+
+```bash
+python early-code/test_account_load.py
+```
+
+**Expected Terminal Output:**
+```text
+✓ Successfully loaded account DQyrAcCrDXQ7NeoqGgDCZwBvWDcYmFCjSb9JtteuvPpz into LiteSVM!
+  Lamports: 157470603015651
+  Data length: 165 bytes
+```
+
+---
+
+### 5. Signer Keypair Loading & ATA Derivation (`test_load_keypair.py`)
+
+This diagnostic reads your local Solana ed25519 developer keypair from `~/.config/solana/id.json` and programmatically derives your deterministic Associated Token Accounts (ATAs) for Wrapped SOL (WSOL) and USDC using Solana's `find_program_address` algorithm. Its utility is to confirm that cryptographic transaction signing is fully operational and that trader token vaults are accurately mapped prior to assembling complex 18-account swap instruction payloads. Use this script to verify your local wallet configuration and token addresses:
+
+```bash
+python early-code/test_load_keypair.py
+```
+
+**Expected Terminal Output:**
+```text
+Loaded Keypair Pubkey: GzdXR3tkDMgjVvzVCXj1YvCqW6VnSGSrk4wJ3Sn6LqNt
+User WSOL ATA: 4Rr9CV4HPGR5nukzEZWrYjeY2EHXpy9UMr95H99N5Ay3
+User USDC ATA: 6nBrJ3cUB1oX4cTtQSwLVe4ZuQqr3zHDGpuSd4bXui9A
 ```
 
 ---
@@ -123,3 +329,15 @@ Ready for Step 4 (LiteSVM Alice & Bob trading script).
 
 - **Developer:** Scorpion_Sign
 - **Project Tutor / Reviewer:** Andrew-Octopus
+
+---
+
+## License
+
+
+
+---
+
+## Project status
+
+Active development across sprint branches — Step 4 (Direct On-Chain Raydium Simulation) complete; Step 5 (Multi-Market Arbitrage) in preparation.
