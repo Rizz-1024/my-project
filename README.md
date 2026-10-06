@@ -84,6 +84,128 @@ graph TD
 
 ---
 
+## Installation
+
+### Prerequisites & System Packages
+Updates package repositories and installs fundamental Linux build utilities, C/C++ compilers, linkers, LLVM toolchains, and SSL cryptographic headers required to compile Rust crates and Solana binaries:
+
+```bash
+sudo apt update && sudo apt install -y \
+    build-essential \
+    pkg-config \
+    libudev-dev \
+    llvm \
+    clang \
+    cmake \
+    libssl-dev \
+    curl \
+    git
+```
+
+### 1. Install Rust Toolchain
+Downloads and runs the official Rustup installer, configuring the `rustc` compiler and `cargo` package manager in non-interactive mode:
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+```
+
+Loads Cargo environment variables into the current terminal session so that `rustc` and `cargo` commands become immediately accessible without needing a terminal restart:
+```bash
+source $HOME/.cargo/env
+```
+
+Queries the active Rust toolchain to verify that both the compiler and package manager are installed correctly and ready for use:
+```bash
+rustc --version
+cargo --version
+```
+
+### 2. Install Solana CLI Toolsuite
+Downloads and executes the official Anza/Agave installer script to install the Solana CLI tools and BPF compilation engine:
+```bash
+sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+```
+
+Temporarily appends the Solana active release binary folder to your current session's `PATH` variable for immediate terminal access:
+```bash
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+```
+
+Permanently writes the Solana binary path into your user's `~/.bashrc` configuration file so that the `solana` command is automatically available in every future terminal window:
+```bash
+echo 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"' >> ~/.bashrc
+```
+
+Queries the Solana executable to verify that the CLI binary is properly linked and displays the installed version:
+```bash
+solana --version
+```
+
+### 3. Install Anchor CLI (via Anchor Version Manager - AVM)
+Downloads and compiles the Anchor Version Manager (`avm`) from the official GitHub repository using Cargo, locking dependencies to prevent build breakage:
+```bash
+cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+```
+
+Uses the newly installed AVM tool to fetch and compile the latest stable release of the Anchor smart contract development framework:
+```bash
+avm install latest
+```
+
+Activates the compiled Anchor release as your global default development version:
+```bash
+avm use latest
+```
+
+Checks the active Anchor binary version to confirm successful compilation and system linkage:
+```bash
+anchor --version
+```
+
+### 4. Clone the Repository
+Clones the complete project repository from GitLab onto your local disk, including all branches, code files, and Mainnet fixture snapshots:
+```bash
+git clone https://gitlab.com/mister_octopus/scorpion_iinternship_project.git
+```
+
+Changes your current working directory to navigate inside the cloned project root folder:
+```bash
+cd scorpion_iinternship_project
+```
+
+### 5. Setup Python Environment & LiteSVM
+Creates an isolated Python virtual environment named `solana_env` in your user home directory to avoid package version collisions with system Python:
+```bash
+python3 -m venv ~/solana_env
+```
+
+Activates the virtual environment so that subsequent Python packages are installed strictly inside this sandbox:
+```bash
+source ~/solana_env/bin/activate
+```
+
+Upgrades Python's package management tool (`pip`) to the newest release to support modern pre-compiled wheel distributions:
+```bash
+pip install --upgrade pip
+```
+
+Installs `solders` (v0.21.0), the Solana Python SDK providing C-bindings for Solana primitives and the in-process LiteSVM runtime engine:
+```bash
+pip install solders==0.21.0
+```
+
+### 6. Generate Developer Keypair
+Generates a new ed25519 Solana cryptographic keypair without a BIP39 passphrase prompt and writes it to Solana's default config path:
+```bash
+solana-keygen new --no-bip39-passphrase -o ~/.config/solana/id.json
+```
+
+Reads the keypair file and outputs its corresponding base58-encoded public key (wallet address) to the terminal:
+```bash
+solana address
+```
+
+---
+
 ## Usage
 
 ### 1. Direct Raydium AMM V4 On-Chain Swap (LiteSVM)
@@ -207,3 +329,15 @@ User USDC ATA: 6nBrJ3cUB1oX4cTtQSwLVe4ZuQqr3zHDGpuSd4bXui9A
 
 - **Developer:** Scorpion_Sign
 - **Project Tutor / Reviewer:** Andrew-Octopus
+
+---
+
+## License
+
+
+
+---
+
+## Project status
+
+Active development across sprint branches — Step 4 (Direct On-Chain Raydium Simulation) complete; Step 5 (Multi-Market Arbitrage) in preparation.
