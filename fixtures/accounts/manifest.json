@@ -1,0 +1,55 @@
+{
+  "_comment": "Mainnet account snapshots for Raydium AMM V4 and Serum DEX trading pair SOL/USDC",
+  "accounts": {
+    "raydium_pool.json": {
+      "address": "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2",
+      "type": "RaydiumAmmPoolState",
+      "description": "Core state for Raydium V4 SOL/USDC pool containing status flags, fees (25 bps), and vault references."
+    },
+    "coin_vault.json": {
+      "address": "DQyrAcCrDXQ7NeoqGgDCZwBvWDcYmFCjSb9JtteuvPpz",
+      "type": "SplTokenAccount",
+      "description": "Raydium base token vault holding WSOL reserves (offsets 64..72 read by LiteSVM)."
+    },
+    "pc_vault.json": {
+      "address": "HLmqeL62xR1QoZ1HKKbXRrdN1p3phKpxRMb2VVopvBBz",
+      "type": "SplTokenAccount",
+      "description": "Raydium quote token vault holding USDC reserves used for constant-product pricing."
+    },
+    "open_orders.json": {
+      "address": "HRk9CMrpq7Jn9sh7mzxE8CChHG8dneX9TXE7j13bPR72",
+      "type": "SerumOpenOrders",
+      "description": "On-chain account tracking open orders placed by Raydium on the Serum DEX orderbook."
+    },
+    "target_orders.json": {
+      "address": "CZza3Ej4Mc58MnxWA385itKujMYYiRwBfZLq7wn99u9g",
+      "type": "RaydiumTargetOrders",
+      "description": "Rebalancing target orders account required in Raydium 18-account swap instruction vector."
+    },
+    "market.json": {
+      "address": "9wFFyRfZBsuAha4YcuxcXLKwMxJR43S7fPfQLusDBzvT",
+      "type": "SerumMarketHeader",
+      "description": "Serum SOL/USDC market configuration defining lot sizes, orderbook pointers, and vault signer seeds."
+    },
+    "bids.json": {
+      "type": "SerumOrderbookSlab",
+      "description": "Memory slab tree containing active buy orders on the Serum orderbook."
+    },
+    "asks.json": {
+      "type": "SerumOrderbookSlab",
+      "description": "Memory slab tree containing active sell orders on the Serum orderbook."
+    },
+    "event_q.json": {
+      "type": "SerumEventQueue",
+      "description": "Serum trade execution and event settlement queue account."
+    },
+    "market_coin_vault.json": {
+      "type": "SplTokenAccount",
+      "description": "Serum internal base vault holding WSOL committed to the orderbook."
+    },
+    "market_pc_vault.json": {
+      "type": "SplTokenAccount",
+      "description": "Serum internal quote vault holding USDC committed to the orderbook."
+    }
+  }
+}

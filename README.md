@@ -1,54 +1,105 @@
 # Name
 
-**Internship Project for Solana Development**
+**Multi-Market Arbitrage & Simulation Engine (Raydium V4 & Orca Whirlpools)**
 
 ---
 
 ## Description
 
-This project provides an SVM-accurate, local on-chain simulation and execution testing framework for decentralized finance (DeFi) trading protocols on the Solana blockchain.
+This branch implements an autonomous on-chain multi-market arbitrage and latency testing harness between **Raydium AMM V4** and **Orca Whirlpools** executed locally inside **LiteSVM** using live on-chain Mainnet state.
 
-### Background & Context
-Testing decentralized trading algorithms and market makers on Solana typically introduces significant engineering friction:
-- **Mainnet Deployments:** Incur real capital risk, network transaction fees, and adverse price slippage.
-- **Devnet Environments:** Feature stale, abandoned liquidity pools, missing peripheral protocol accounts, and intermittent RPC node unreliability.
-- **Off-Chain Mocking (Python / TypeScript):** Relies on mathematical approximations that bypass low-level Berkeley Packet Filter (BPF) runtime panics, account serialization quirks, compute unit limits, and Cross-Program Invocation (CPI) constraints.
+The suite contains two specialized execution engines:
+1. **`circular_arbitrage.py`** — Multithreaded two-way closed-loop spatial arbitrage engine (`SOL -> SOL` and `USDC -> USDC`) evaluating 4 circular routes simultaneously across parallel CPU worker threads every 100 ms.
+2. **`live_arbitrage_monitor.py`** — High-frequency dual-market price monitor and network latency simulation (400 ms) with on-chain slippage reversion inside LiteSVM.
 
-This project solves these limitations by implementing a **local, deterministic execution harness powered by LiteSVM** (an in-process Solana Virtual Machine runtime). Instead of simulating trades through Python math or mock vaults, this suite loads real compiled Solana program bytecode (`.so`) and hydrates the VM ledger with serialized account state snapshots (`.json`) dumped directly from Solana Mainnet-Beta. This delivers microsecond-level execution benchmarks with zero network latency, zero transaction fees, and 100% cryptographic and state fidelity to Mainnet.
+---
 
-### Features & Differentiating Capabilities
-- **Multi-Venue Market Research (`feat/market-selection`):** In-depth technical taxonomy comparing Solana's primary trading architectures:
-  - **Orca Whirlpools:** Concentrated Liquidity AMM (CLMM) utilizing localized tick arrays for capital efficiency.
-  - **Phoenix (Ellipsis Labs):** Instant settlement, non-cranked Central Limit Orderbook (CLOB).
-  - **Raydium AMM V4:** Deep-liquidity hybrid AMM combining constant-product pools with Serum/OpenBook order routing.
-  - **Jito MEV / JTX:** Atomic transaction bundles and tip mechanisms designed for sandwich-resistant execution.
-- **Simulated Constant-Product Pool (`early-code/simulate_trade.py`):** Models multi-party trading (Alice & Bob) with integer-scaled token precision ($10^9$ lamports for SOL, $10^6$ units for USDC) and 30 bps fee accounting.
-- **Direct On-Chain Raydium V4 Execution Client (`early-code/raydium.py`):**
-  - Executes directly against official compiled smart contracts: `raydium_amm.so`, `spl_token.so`, and `serum_dex.so`.
-  - Hydrates real Mainnet liquidity from 11 account state fixtures holding **157,470.6015 SOL** and **19,158,073.74 USDC**.
-  - Derives deterministic SPL Associated Token Accounts (ATAs) and provisions rent-exempt balances (`2,039,280` lamports for 165 bytes).
-  - Assembles raw binary instruction payloads for Raydium Swap (Instruction Index 9) with exact 18-account metadata configurations (`is_signer`, `is_writable`).
-  - Reads post-trade token balances directly from SPL Token byte layouts (offsets 64..72) and monitors compute units (~18,552 CUs).
-- **Mathematical Invariant Verification:** Verifies continuous constant-product preservation ($x \cdot y = k$) with 25 bps pool fee deductions and dynamic slippage tolerance bounds (`min_amount_out`).
+### In-Depth Technical & Logical Architecture
 
-### Program Binaries (`.so`) & Mainnet Account Fixtures (`.json`)
-To eliminate mocked balances and fake Python math, LiteSVM directly executes official BPF shared object binaries against frozen Mainnet account snapshots:
+#### Engine 1: `circular_arbitrage.py` (Two-Way Circular Spatial Arbitrage Engine)
+1. **Closed-Loop Invariant:** Eliminates directional inventory risk by evaluating closed cycles where the trader starts and ends with the exact same asset:
+   - **Route 1 (`SOL -> SOL`):** Sell SOL on Raydium for USDC -> Buy back SOL on Orca -> Accumulate net SOL.
+   - **Route 2 (`SOL -> SOL`):** Sell SOL on Orca for USDC -> Buy back SOL on Raydium -> Accumulate net SOL.
+   - **Route 3 (`USDC -> USDC`):** Buy SOL on Raydium with USDC -> Sell back SOL on Orca -> Accumulate net USDC.
+   - **Route 4 (`USDC -> USDC`):** Buy SOL on Orca with USDC -> Sell back SOL on Raydium -> Accumulate net USDC.
+2. **Multithreaded Parallel Concurrency:** Dispatches all four circular routes into a `concurrent.futures.ThreadPoolExecutor(max_workers=4)`. All four loops are evaluated concurrently in memory on separate CPU cores every 100 milliseconds.
+3. **Exact Fee & Concentrated Liquidity Math:** Calculates Raydium constant-product pool deductions (25 bps) and Orca tick-spacing liquidity step-math (4 bps) for a total round-trip fee friction of ~29 bps. Only opportunities exceeding this combined threshold are flagged as profitable.
+4. **Anchor IDL & Dual-DEX LiteSVM Execution:** Constructs instruction payloads using Anchor's instruction selector (`0xf8c69e91e17587c8`) and exact 12-account resolution vectors, executing against both `raydium_amm.so` and `whirlpool.so` on LiteSVM.
 
-| File Location | Type | Address / Program ID | Functional Role in LiteSVM |
-| :--- | :--- | :--- | :--- |
-| `fixtures/raydium_amm.so` | Program Binary | `675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8` | Core Raydium AMM V4 contract; executes swap math, fee deduction (25 bps), and slippage checks. |
-| `fixtures/spl_token.so` | Program Binary | `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` | Official SPL Token program; executes balance debits, credits, and ATA initialization. |
-| `fixtures/serum_dex.so` | Program Binary | `srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX` | Serum DEX / OpenBook program; required by Raydium for hybrid orderbook state validation. |
-| `fixtures/raydium_pool.json` | Account Snapshot | `58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2` | SOL/USDC pool state with status flags, fee rates, and vault pointers. |
-| `fixtures/coin_vault.json` | Account Snapshot | `DQyrAcCrDXQ7NeoqGgDCZwBvWDcYmFCjSb9JtteuvPpz` | Live WSOL token vault holding **157,470.6015 SOL** real reserves. |
-| `fixtures/pc_vault.json` | Account Snapshot | `HLmqeL62xR1QoZ1HKKbXRrdN1p3phKpxRMb2VVopvBBz` | Live USDC token vault holding **19,158,073.74 USDC** real reserves. |
-| `fixtures/open_orders.json` | Account Snapshot | `HRk9CMrpq7Jn9sh7mzxE8CChHG8dneX9TXE7j13bPR72` | Raydium tracking account for orders placed on the Serum orderbook. |
-| `fixtures/target_orders.json` | Account Snapshot | `CZza3Ej4Mc58MnxWA385itKujMYYiRwBfZLq7wn99u9g` | Target rebalancing account used by Raydium to manage Serum order depths. |
-| `fixtures/market.json` | Account Snapshot | `9wFFyRfZBsuAha4YcuxcXLKwMxJR43S7fPfQLusDBzvT` | Serum SOL/USDC market configuration account. |
-| `fixtures/bids.json` / `asks.json` | Account Snapshots | Orderbook Slabs | Serum buy/sell orderbook slab trees required for market state verification. |
-| `fixtures/event_q.json` | Account Snapshot | Event Queue | Serum trade execution and settlement queue account. |
-| `fixtures/market_coin_vault.json` | Account Snapshot | Serum WSOL Vault | Serum internal token vault referenced in swap account inputs. |
-| `fixtures/market_pc_vault.json` | Account Snapshot | Serum USDC Vault | Serum internal quote vault referenced in swap account inputs. |
+#### Engine 2: `live_arbitrage_monitor.py` (Real-Time Disparity & Latency Simulation)
+1. **Live State Extraction:** Connects to Solana Mainnet JSON-RPC every 500 ms to sample live 64-bit token reserves from Raydium's `coin_vault` and `pc_vault` (offsets `64..72`), alongside the Q64.64 fixed-point square-root price from Orca's Whirlpool account (offsets `65..81`).
+2. **Divergence Detection:** Calculates spot prices across both AMMs simultaneously. When the absolute price spread exceeds a defined threshold (0.03%), an arbitrage execution candidate is registered at Slot T0.
+3. **Network Latency Simulation:** Enforces a deterministic propagation delay (400 ms) representing in-flight network transit, validator mempool queuing, and slot leadership handoff.
+4. **On-Chain Execution & Slippage Reversion:** Re-queries the live state at Slot T1, hydrates an isolated LiteSVM instance, and executes the trade against real BPF bytecode. If other traders on Mainnet shifted the pool balance during the 400 ms window such that minimum output was breached, the compiled contract triggers an on-chain program error (`Custom(30): Exceeded desired slippage limit`) and reverts the transaction with zero capital loss.
+
+---
+
+### Fixtures
+
+```text
+fixtures/
+├── contracts/                  # Compiled on-chain Berkeley Packet Filter (.so) binaries
+│   ├── raydium_amm.so          # Raydium AMM V4 bytecode
+│   ├── raydium_cp_swap.so      # Raydium Constant-Product Swap reference bytecode
+│   ├── serum_dex.so            # Serum / OpenBook orderbook engine bytecode
+│   ├── spl_token.so            # Canonical Solana SPL Token program bytecode
+│   └── whirlpool.so            # Orca Whirlpool concentrated liquidity bytecode
+└── accounts/                   # Mainnet ledger account snapshots (.json)
+    ├── manifest.json           # Contextual descriptions and metadata for each account
+    ├── raydium_pool.json       # Raydium AMM pool state
+    ├── coin_vault.json         # WSOL base reserve vault
+    ├── pc_vault.json           # USDC quote reserve vault
+    ├── open_orders.json        # Serum orderbook open orders
+    ├── target_orders.json      # Raydium rebalancing orders
+    ├── market.json             # Serum SOL/USDC market header
+    ├── bids.json               # Serum buy orderbook slab
+    ├── asks.json               # Serum sell orderbook slab
+    ├── event_q.json            # Serum trade event queue
+    ├── market_coin_vault.json  # Serum internal WSOL vault
+    └── market_pc_vault.json    # Serum internal USDC vault
+```
+
+---
+
+### Fixture Files Reference
+
+#### Program Shared Object Binaries (`fixtures/contracts/*.so`)
+- **`fixtures/contracts/raydium_amm.so`**  
+  The official compiled Berkeley Packet Filter (BPF) binary of the Raydium AMM V4 smart contract. It executes native on-chain constant-product swap math, enforces 25 bps pool fee deductions, and validates pool state flags during local LiteSVM simulation.
+- **`fixtures/contracts/whirlpool.so`**  
+  The official compiled BPF binary of Orca Whirlpools dumped directly from Mainnet ProgramData account `CtXfPzz36dH5Ws4UYKZvrQ1Xqzn42ecDW6y8NKuiN8nD`. It implements concentrated liquidity tick calculations, sqrt-price curves, and Anchor instruction routing inside the VM.
+- **`fixtures/contracts/spl_token.so`**  
+  The canonical Solana Program Library (SPL) Token contract responsible for low-level token accounting. It executes balance debits, credits, transfers, and Associated Token Account (ATA) initializations across simulated trades.
+- **`fixtures/contracts/serum_dex.so`**  
+  The compiled Serum DEX / OpenBook orderbook contract. Raydium AMM V4 is architected as a hybrid protocol that routes through Serum orderbooks, making this binary required by Raydium to validate market state and execute swaps.
+- **`fixtures/contracts/raydium_cp_swap.so`**  
+  The compiled BPF binary for Raydium Constant Product Swap (CP-Swap) program. It provides the reference execution runtime for standard pool mathematical validation and cross-testing against AMM V4.
+
+#### Ledger Account Snapshots (`fixtures/accounts/*.json`)
+- **`fixtures/accounts/manifest.json`**  
+  JSON metadata file providing human-readable descriptions, account types, and base58 public keys for all account snapshots in the project.
+- **`fixtures/accounts/raydium_pool.json`**  
+  Contains the core on-chain state of the Raydium SOL/USDC market pool (`58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2`). It defines pool status flags, fee rates, token mint references, and authority PDA addresses needed for swap validation.
+- **`fixtures/accounts/coin_vault.json`**  
+  The SPL Token account holding Raydium's native WSOL vault reserves (`DQyrAcCrDXQ7NeoqGgDCZwBvWDcYmFCjSb9JtteuvPpz`). LiteSVM reads the raw byte layout at offsets 64..72 to verify live SOL balances during swap execution.
+- **`fixtures/accounts/pc_vault.json`**  
+  The SPL Token account holding Raydium's USDC vault reserves (`HLmqeL62xR1QoZ1HKKbXRrdN1p3phKpxRMb2VVopvBBz`). It holds the quote-token reserves used by the constant-product formula to compute price quotes and transfer USDC outputs.
+- **`fixtures/accounts/open_orders.json`**  
+  The on-chain account tracking open orders placed by Raydium on the Serum DEX orderbook (`HRk9CMrpq7Jn9sh7mzxE8CChHG8dneX9TXE7j13bPR72`). Raydium's smart contract requires this account to calculate total pool liquidity.
+- **`fixtures/accounts/target_orders.json`**  
+  The target orders rebalancing account (`CZza3Ej4Mc58MnxWA385itKujMYYiRwBfZLq7wn99u9g`) used by Raydium to manage depth on the orderbook. It is verified by the AMM program as part of its required 18-account swap metadata array.
+- **`fixtures/accounts/market.json`**  
+  The Serum SOL/USDC market configuration account (`9wFFyRfZBsuAha4YcuxcXLKwMxJR43S7fPfQLusDBzvT`). It defines base and quote lot sizes, orderbook pointers, and vault signer seeds for the hybrid market.
+- **`fixtures/accounts/bids.json`**  
+  The memory slab tree containing active buy orders on the Serum orderbook. The Raydium program inspects this account during instruction processing to ensure the hybrid market state is intact.
+- **`fixtures/accounts/asks.json`**  
+  The memory slab tree containing active sell orders on the Serum orderbook. It represents the ask-side orderbook depth required alongside `bids.json` for Serum market validity checks.
+- **`fixtures/accounts/event_q.json`**  
+  The trade execution and event settlement queue account for Serum. It logs filled orders and trade events that Raydium validates before finalizing token movements.
+- **`fixtures/accounts/market_coin_vault.json`**  
+  The internal Serum WSOL vault account referenced by the market header. Raydium checks this vault to ensure funds are properly segregated between AMM vaults and orderbook vaults.
+- **`fixtures/accounts/market_pc_vault.json`**  
+  The internal Serum USDC vault account referenced by the market header. It holds quote-side tokens committed to the Serum orderbook, completing the required market account array.
 
 ---
 
@@ -57,254 +108,199 @@ To eliminate mocked balances and fake Python math, LiteSVM directly executes off
 [![Solana](https://img.shields.io/badge/Solana-Mainnet--Beta-black?logo=solana)](https://solana.com)
 [![Engine](https://img.shields.io/badge/Engine-LiteSVM-blueviolet)](https://github.com/jito-foundation/litesvm)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://python.org)
-[![GitLab](https://img.shields.io/badge/GitLab-Multi--Branch%20Sprint-orange?logo=gitlab)](https://gitlab.com/mister_octopus/scorpion_iinternship_project/-/branches)
+[![GitLab](https://img.shields.io/badge/GitLab-feat%2Fcircular--arbitrage-orange?logo=gitlab)](https://gitlab.com/mister_octopus/scorpion_iinternship_project/-/tree/feat/circular-arbitrage)
 
 ---
 
 ## Visuals
 
-### System Architecture & Cross-Program Invocation Flow
+### Two-Way Circular Arbitrage Cycle Routing
 
 ```mermaid
 graph TD
-    User[Trader Signer Keypair] -->|Signs Transaction| Client[Execution Client: raydium.py]
-    Client -->|Instruction Index 9| AMM[Raydium AMM V4 Program]
-    AMM -->|Validates Liquidity Depth| Orderbook[Serum DEX Orderbook]
-    AMM -->|Constant Product Invariant| PoolState[Raydium Pool State]
-    AMM -->|Cross Program Invocation| SPL[SPL Token Program]
-    SPL -->|Debits 2.0 SOL| UserWSOL[Trader WSOL Account]
-    SPL -->|Credits 2.0 SOL| CoinVault[SOL Vault: 157470 SOL]
-    SPL -->|Debits 242.71 USDC| PCVault[USDC Vault: 19158073 USDC]
-    SPL -->|Credits 242.71 USDC| UserUSDC[Trader USDC Account]
+    StartSOL[Starting Capital: SOL] --> R1[Route 1: Raydium to Orca]
+    StartSOL --> R2[Route 2: Orca to Raydium]
+    R1 --> Swap1A[Leg 1: Sell SOL on Raydium for USDC]
+    Swap1A --> Swap1B[Leg 2: Buy SOL on Orca with USDC]
+    Swap1B --> EndSOL1[Ending Capital: SOL + Net Profit]
+    R2 --> Swap2A[Leg 1: Sell SOL on Orca for USDC]
+    Swap2A --> Swap2B[Leg 2: Buy SOL on Raydium with USDC]
+    Swap2B --> EndSOL2[Ending Capital: SOL + Net Profit]
+
+    StartUSDC[Starting Capital: USDC] --> R3[Route 3: Raydium to Orca]
+    StartUSDC --> R4[Route 4: Orca to Raydium]
+    R3 --> Swap3A[Leg 1: Buy SOL on Raydium with USDC]
+    Swap3A --> Swap3B[Leg 2: Sell SOL on Orca for USDC]
+    Swap3B --> EndUSDC1[Ending Capital: USDC + Net Profit]
+    R4 --> Swap4A[Leg 1: Buy SOL on Orca with USDC]
+    Swap4A --> Swap4B[Leg 2: Sell SOL on Raydium with USDC]
+    Swap4B --> EndUSDC2[Ending Capital: USDC + Net Profit]
+```
+
+### Multithreaded Concurrency & LiteSVM Execution Flow
+
+```mermaid
+graph TD
+    RPC[Solana Mainnet JSON-RPC] -->|Live Token Reserves| Monitor[Live State Sampler]
+    Monitor -->|100ms Interval| Dispatcher[ThreadPoolExecutor: 4 Workers]
+    Dispatcher -->|Thread 1| Worker1[Route 1: SOL Raydium to Orca]
+    Dispatcher -->|Thread 2| Worker2[Route 2: SOL Orca to Raydium]
+    Dispatcher -->|Thread 3| Worker3[Route 3: USDC Raydium to Orca]
+    Dispatcher -->|Thread 4| Worker4[Route 4: USDC Orca to Raydium]
+    Worker1 -->|Spread GT 29 bps| VM[Isolated LiteSVM Instance]
+    Worker2 -->|Spread GT 29 bps| VM
+    Worker3 -->|Spread GT 29 bps| VM
+    Worker4 -->|Spread GT 29 bps| VM
+    VM -->|Load BPF| RaydiumProg[fixtures/contracts/raydium_amm.so]
+    VM -->|Load BPF| OrcaProg[fixtures/contracts/whirlpool.so]
+    VM -->|Execute Leg 1 and 2| Result[Atomic Settlement or Revert]
 ```
 
 ---
 
 ## Installation
 
-### Prerequisites & System Packages
-Updates package repositories and installs fundamental Linux build utilities, C/C++ compilers, linkers, LLVM toolchains, and SSL cryptographic headers required to compile Rust crates and Solana binaries:
-
-```bash
-sudo apt update && sudo apt install -y \
-    build-essential \
-    pkg-config \
-    libudev-dev \
-    llvm \
-    clang \
-    cmake \
-    libssl-dev \
-    curl \
-    git
-```
-
-### 1. Install Rust Toolchain
-Downloads and runs the official Rustup installer, configuring the `rustc` compiler and `cargo` package manager in non-interactive mode:
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-```
-
-Loads Cargo environment variables into the current terminal session so that `rustc` and `cargo` commands become immediately accessible without needing a terminal restart:
-```bash
-source $HOME/.cargo/env
-```
-
-Queries the active Rust toolchain to verify that both the compiler and package manager are installed correctly and ready for use:
-```bash
-rustc --version
-cargo --version
-```
-
-### 2. Install Solana CLI Toolsuite
-Downloads and executes the official Anza/Agave installer script to install the Solana CLI tools and BPF compilation engine:
-```bash
-sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
-```
-
-Temporarily appends the Solana active release binary folder to your current session's `PATH` variable for immediate terminal access:
-```bash
-export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-```
-
-Permanently writes the Solana binary path into your user's `~/.bashrc` configuration file so that the `solana` command is automatically available in every future terminal window:
-```bash
-echo 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"' >> ~/.bashrc
-```
-
-Queries the Solana executable to verify that the CLI binary is properly linked and displays the installed version:
-```bash
-solana --version
-```
-
-### 3. Install Anchor CLI (via Anchor Version Manager - AVM)
-Downloads and compiles the Anchor Version Manager (`avm`) from the official GitHub repository using Cargo, locking dependencies to prevent build breakage:
-```bash
-cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
-```
-
-Uses the newly installed AVM tool to fetch and compile the latest stable release of the Anchor smart contract development framework:
-```bash
-avm install latest
-```
-
-Activates the compiled Anchor release as your global default development version:
-```bash
-avm use latest
-```
-
-Checks the active Anchor binary version to confirm successful compilation and system linkage:
-```bash
-anchor --version
-```
-
-### 4. Clone the Repository
-Clones the complete project repository from GitLab onto your local disk, including all branches, code files, and Mainnet fixture snapshots:
-```bash
-git clone https://gitlab.com/mister_octopus/scorpion_iinternship_project.git
-```
-
-Changes your current working directory to navigate inside the cloned project root folder:
-```bash
-cd scorpion_iinternship_project
-```
-
-### 5. Setup Python Environment & LiteSVM
-Creates an isolated Python virtual environment named `solana_env` in your user home directory to avoid package version collisions with system Python:
-```bash
-python3 -m venv ~/solana_env
-```
-
-Activates the virtual environment so that subsequent Python packages are installed strictly inside this sandbox:
+### 1. Activate Environment
+Activates the project's Python virtual environment:
 ```bash
 source ~/solana_env/bin/activate
 ```
 
-Upgrades Python's package management tool (`pip`) to the newest release to support modern pre-compiled wheel distributions:
+### 2. Verify Python Runtime & LiteSVM Dependency
+Verifies that `solders` (v0.21.0) is present for LiteSVM execution:
 ```bash
-pip install --upgrade pip
-```
-
-Installs `solders` (v0.21.0), the Solana Python SDK providing C-bindings for Solana primitives and the in-process LiteSVM runtime engine:
-```bash
-pip install solders==0.21.0
-```
-
-### 6. Generate Developer Keypair
-Generates a new ed25519 Solana cryptographic keypair without a BIP39 passphrase prompt and writes it to Solana's default config path:
-```bash
-solana-keygen new --no-bip39-passphrase -o ~/.config/solana/id.json
-```
-
-Reads the keypair file and outputs its corresponding base58-encoded public key (wallet address) to the terminal:
-```bash
-solana address
+pip show solders
 ```
 
 ---
 
 ## Usage
 
-### 1. Direct Raydium AMM V4 On-Chain Swap (LiteSVM)
+Each script runs out-of-the-box with **zero required arguments**:
 
-Execute a direct on-chain swap from **SOL to USDC**:
+### 1. Execute Multithreaded Circular Arbitrage Engine
+
+Activate the environment:
 ```bash
-python early-code/raydium.py --direction sol-to-usdc --amount 2.0
+source ~/solana_env/bin/activate
+```
+
+Navigate to repository root:
+```bash
+cd scorpion_iinternship_project
+```
+
+Run with zero arguments (runs 10 sample iterations and exits cleanly):
+```bash
+python early-code/circular_arbitrage.py
+```
+
+Run in continuous real-time monitoring mode (100 ms interval):
+```bash
+python early-code/circular_arbitrage.py --continuous
 ```
 
 **Expected Terminal Output:**
 ```text
---- Raydium AMM V4 Direct On-Chain Execution ---
-Signer Wallet:      GzdXR3tkDMgjVvzVCXj1YvCqW6VnSGSrk4wJ3Sn6LqNt
-Raydium Pool:       58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2
-SOL Vault Reserve:  157,470.6015 SOL
-USDC Vault Reserve: 19,158,073.74 USDC
-
-Executing Swap:     2.0000 SOL -> USDC
-Expected Output:    242.7112 USDC
-Slippage Limit:     241.4976 USDC (50 bps)
-Status:             Confirmed by Raydium smart contract
-Compute Units:      18,552
-
-Output Received:    +242.7112 USDC
-Updated SOL Vault:  157,472.6015 SOL
-Updated USDC Vault: 19,157,831.03 USDC
+================================================================================
+ Two-Way Circular Arbitrage Monitor (SOL<->SOL & USDC<->USDC)
+ Polling Interval:  100 ms
+ Trade Quantities:  1.00 SOL | 120.00 USDC
+ Minimum Profit:    >0.0000 token gain to trigger
+ Signer Keypair:    GzdXR3tkDMgjVvzVCXj1YvCqW6VnSGSrk4wJ3Sn6LqNt
+================================================================================
+Time      Slot        Raydium ($)   Orca ($)      Best Path              Net Profit
+--------------------------------------------------------------------------------
+19:58:34  454323211   115.8679      115.8162      SOL via RAYDIUM_THEN_ORCA -0.0025 SOL (-0.246%)
+19:58:35  454323218   115.8667      115.8162      SOL via RAYDIUM_THEN_ORCA -0.0025 SOL (-0.247%)
+19:58:36  454323221   115.8667      115.8162      SOL via RAYDIUM_THEN_ORCA -0.0025 SOL (-0.247%)
 ```
 
-Execute a reverse swap from **USDC to SOL**:
+---
+
+### 2. Execute Real-Time Live Arbitrage & Latency Monitor
+
+Activate the environment:
 ```bash
-python early-code/raydium.py --direction usdc-to-sol --amount 200.0
+source ~/solana_env/bin/activate
 ```
 
-### 2. Standalone Constant-Product Pool Simulation
-Simulate multi-party token swaps between Alice and Bob:
+Navigate to repository root:
 ```bash
-python early-code/simulate_trade.py
+cd scorpion_iinternship_project
 ```
 
-### 3. Market Research & Venue Configurations
-Inspect researched market configurations and selection parameters:
+Run with zero arguments (runs 10 sample iterations and exits cleanly):
 ```bash
-python early-code/markets.py
+python early-code/live_arbitrage_monitor.py
 ```
 
-### 4. Diagnostic & Account Loading Verification
-Run tests verifying LiteSVM account hydration and keypair loading:
+Run in continuous mode:
 ```bash
-python early-code/test_litesvm_load.py
-python early-code/test_account_load.py
-python early-code/test_load_keypair.py
+python early-code/live_arbitrage_monitor.py --continuous
+```
+
+**Expected Terminal Output:**
+```text
+============================================================================
+ Solana Mainnet Multi-Market Arbitrage & LiteSVM Execution Monitor
+ Polling Interval:  500 ms
+ Trigger Threshold: 0.030% spread
+ Trade Amount:      1.00 SOL
+ Signer Keypair:    GzdXR3tkDMgjVvzVCXj1YvCqW6VnSGSrk4wJ3Sn6LqNt
+============================================================================
+Time         Slot        Raydium ($)    Orca ($)       Spread ($)   Status
+----------------------------------------------------------------------------
+19:58:38     454323229   115.8667       115.8162       0.0504       ⚡ DIVERGENCE (0.04%)
+
+────────────────────────────────────────────────────────────────────────────
+[*] Price spread exceeded threshold! Testing trade in LiteSVM for 1.00 SOL...
+  [+] Execution Status: Swap successfully confirmed on LiteSVM against live market state.
+  [+] Received Output:  115.5238 USDC
+  [+] Compute Units:    18,553 CUs
+────────────────────────────────────────────────────────────────────────────
 ```
 
 ---
 
 ## Support
 
-
+For technical inquiries regarding pool state layouts, BPF bytecode loaders, or LiteSVM execution boundaries, open an issue on the project repository or reach out directly via GitLab.
 
 ---
 
 ## Roadmap
 
-- [x] **Step 1: Solana Market Research (`feat/market-selection`)** — In-depth architectural analysis of JTX, Orca Whirlpools, Phoenix, and Raydium.
-- [x] **Step 2: Market Selection (`feat/market-selection`)** — Documentation of selection rationale in `early-code/MARKET_SELECTION.md` and definitions in `markets.py`.
-- [x] **Step 3: Tooling & Environment Setup** — Local WSL2, Solana CLI, Anchor, and Python Solders environment configuration.
-- [x] **Step 4: LiteSVM Trading & AMM Simulation (`feat/litesvm-simulation`)**
-  - [x] **Part A:** In-process constant-product pool simulation modeling Alice & Bob trades (`simulate_trade.py`).
-  - [x] **Part B:** Direct Raydium AMM V4 on-chain client (`raydium.py`) using Mainnet bytecode binaries and account snapshots.
-- [ ] **Step 5: Multi-Market Arbitrage Simulation** — Real-time price disparity detection and single-transaction atomic arbitrage execution between Raydium and secondary DEXs (Orca Whirlpools / Phoenix).
+- [x] **Two-Way Circular Spatial Arbitrage Engine:** Closed-loop `SOL -> SOL` and `USDC -> USDC` routes eliminating directional exposure.
+- [x] **Multithreaded Parallel Route Evaluation:** 4 concurrent CPU workers evaluating routes at 100 ms frequency.
+- [x] **Live Dual-Market Monitoring & Latency Simulation:** Dynamic price sampling against Raydium and Orca with 400 ms latency simulation.
+- [x] **On-Chain Slippage Enforcement in LiteSVM:** Bytecode execution against `raydium_amm.so` and `whirlpool.so` with smart contract revert handling.
+- [x] **Structured Fixture Organization:** Categorized `fixtures/contracts/` and `fixtures/accounts/` directories with metadata manifest.
 
 ---
 
 ## Contributing
 
-This repository follows a structured sprint workflow:
-
-### Branch Structure
-- `main` — Production baseline and stable releases.
-- `feat/<feature-name>` — Feature development branches (e.g. `feat/market-selection`, `feat/litesvm-simulation`).
-- `docs/<doc-name>` — Documentation and changelog tracking.
-- `fix/<fix-name>` — Bug fixes and patches.
-
-### Development Guidelines
-1. Merge request (MR) titles and commit messages must strictly adhere to the [Conventional Commits](https://www.conventionalcommits.org/) specification (e.g. `feat: ...`, `fix: ...`, `docs: ...`).
-2. All simulations and tests must execute cleanly with exit code 0 before MR submission.
-3. `CHANGELOG.md` must be updated under `[Unreleased]` for any user-facing functional changes.
+This branch follows standard GitLab feature sprint conventions:
+1. All changes must be tested in an isolated virtual environment (`solana_env`).
+2. New simulations must run out-of-the-box with zero required CLI arguments.
+3. Code must execute cleanly with exit code 0 before submitting Merge Requests.
 
 ---
 
 ## Authors and acknowledgment
 
-- **Developer:** Scorpion_Sign
-- **Project Tutor / Reviewer:** Andrew-Octopus
+- **Developer:** Scorpion_Sign (GitLab: [`@sufierizwan4`](https://gitlab.com/sufierizwan4))
+- **Project Tutor / Reviewer:** Andrew-Octopus (GitLab: [`@mister_octopus`](https://gitlab.com/mister_octopus))
 
 ---
 
 ## License
 
-
+Internal educational project for internship evaluation.
 
 ---
 
 ## Project status
 
-Active development across sprint branches — Step 4 (Direct On-Chain Raydium Simulation) complete; Step 5 (Multi-Market Arbitrage) in preparation.
+Active development on branch `feat/circular-arbitrage`. Two-way circular arbitrage and live latency simulation engines are implemented, verified in LiteSVM with exit code 0, and ready for review.
