@@ -1,36 +1,55 @@
 # Name
 
-**Multi-Market Arbitrage & Simulation Engine (Raydium V4 & Orca Whirlpools)**
+**Multi-Market & Multi-Token Arbitrage Simulation Engine**
 
 ---
 
 ## Description
 
-This branch implements an autonomous on-chain multi-market arbitrage and latency testing harness between **Raydium AMM V4** and **Orca Whirlpools** executed locally inside **LiteSVM** using live on-chain Mainnet state.
+This branch implements an autonomous on-chain multi-market arbitrage and latency testing harness across **Raydium AMM V4**, **Orca Whirlpools**, **Raydium CLMM**, and **Meteora DLMM** executed locally inside **LiteSVM** using live on-chain Mainnet state.
 
-The suite contains two specialized execution engines:
-1. **`circular_arbitrage.py`** — Multithreaded two-way closed-loop spatial arbitrage engine (`SOL -> SOL` and `USDC -> USDC`) evaluating 4 circular routes simultaneously across parallel CPU worker threads every 100 ms.
-2. **`live_arbitrage_monitor.py`** — High-frequency dual-market price monitor and network latency simulation (400 ms) with on-chain slippage reversion inside LiteSVM.
+The suite contains three specialized execution engines:
+1. **`multi_market_arbitrage.py`** — Multi-market, multi-token circular arbitrage engine with calculus-based optimal trade sizing ($x^*$), zero-profit ceiling enforcement ($2x^*$), and parallel multithreaded route discovery (`ThreadPoolExecutor`).
+2. **`circular_arbitrage.py`** — Multithreaded two-way closed-loop spatial arbitrage engine (`SOL -> SOL` and `USDC -> USDC`) evaluating 4 circular routes simultaneously across parallel CPU worker threads every 100 ms.
+3. **`live_arbitrage_monitor.py`** — High-frequency dual-market price monitor and network latency simulation (400 ms) with on-chain slippage reversion inside LiteSVM.
 
 ---
 
 ### In-Depth Technical & Logical Architecture
 
-#### Engine 1: `circular_arbitrage.py` (Two-Way Circular Spatial Arbitrage Engine)
-1. **Closed-Loop Invariant:** Eliminates directional inventory risk by evaluating closed cycles where the trader starts and ends with the exact same asset:
-   - **Route 1 (`SOL -> SOL`):** Sell SOL on Raydium for USDC -> Buy back SOL on Orca -> Accumulate net SOL.
-   - **Route 2 (`SOL -> SOL`):** Sell SOL on Orca for USDC -> Buy back SOL on Raydium -> Accumulate net SOL.
-   - **Route 3 (`USDC -> USDC`):** Buy SOL on Raydium with USDC -> Sell back SOL on Orca -> Accumulate net USDC.
-   - **Route 4 (`USDC -> USDC`):** Buy SOL on Orca with USDC -> Sell back SOL on Raydium -> Accumulate net USDC.
-2. **Multithreaded Parallel Concurrency:** Dispatches all four circular routes into a `concurrent.futures.ThreadPoolExecutor(max_workers=4)`. All four loops are evaluated concurrently in memory on separate CPU cores every 100 milliseconds.
-3. **Exact Fee & Concentrated Liquidity Math:** Calculates Raydium constant-product pool deductions (25 bps) and Orca tick-spacing liquidity step-math (4 bps) for a total round-trip fee friction of ~29 bps. Only opportunities exceeding this combined threshold are flagged as profitable.
-4. **Anchor IDL & Dual-DEX LiteSVM Execution:** Constructs instruction payloads using Anchor's instruction selector (`0xf8c69e91e17587c8`) and exact 12-account resolution vectors, executing against both `raydium_amm.so` and `whirlpool.so` on LiteSVM.
+#### Engine 1: `multi_market_arbitrage.py` (Multi-Market Multi-Token Circular Engine with Optimal Sizing Calculus)
+1. **Cross-Protocol Liquidity Graph:** Integrates diverse Automated Market Maker mechanisms across four protocols and four key SPL assets (`SOL`, `USDC`, `BONK`, `JitoSOL`):
+   - **Raydium AMM V4:** Constant-product liquidity curve ($x \cdot y = k$) coupled to Serum orderbooks.
+   - **Orca Whirlpools:** Concentrated liquidity market maker (CLMM) tracking active tick-arrays and $\sqrt{P}$ Q64.64 price representations.
+   - **Raydium CLMM / CP-Swap:** High-efficiency localized fee tiers and tick liquidity.
+   - **Meteora DLMM:** Dynamic liquidity bin corridors enabling zero-slippage rebalancing within active price bins.
+2. **Strictly Closed-Loop Circular Invariant:** Eliminates directional market exposure by evaluating closed-cycle routing graphs:
+   - **Spatial Circular Loops:** 2-hop cycles (`SOL -> Venue A -> USDC -> Venue B -> SOL` and `USDC -> Venue A -> SOL -> Venue B -> USDC`).
+   - **Triangular Cross-Token Loops:** 3-hop cycles (`SOL -> BONK -> USDC -> SOL`).
+3. **Calculus-Based Optimal Sizing Engine:**
+   Analytical calculation of optimal capital injection $\Delta x^*$ to capture the peak of the profit curve where marginal profit equals zero ($\frac{d\Pi}{dx} = 0$):
+   $$\Delta x^* = \frac{\sqrt{R_{A,1} \cdot R_{A,2} \cdot R_{B,1} \cdot R_{B,2} \cdot \gamma_A \cdot \gamma_B} - R_{A,1} \cdot R_{B,2}}{\gamma_B \cdot R_{A,2} + R_{B,2}}$$
+   where $\gamma_k = 1 - \text{fee\_bps}_k / 10000$ represents pool retention after transaction fee deductions.
+4. **Zero-Profit Slippage Ceiling ($2x^*$):**
+   Due to constant-product quadratic price slippage, net profit returns to zero at twice the optimal input size:
+   $$\Delta x_{\text{zero\_profit}} \approx 2 \cdot \Delta x^*$$
+   Any trade size exceeding $2x^*$ exhausts the initial price spread and enters negative net return. The execution engine enforces:
+   $$\text{Trade Size} = \min(x^*, \text{Available Wallet Stock})$$
+   ensuring the engine never executes into negative yield or exceeds on-chain inventory.
+5. **Multithreaded Parallel Route Discovery:** All candidate routes (spatial and triangular) are dispatched across a `concurrent.futures.ThreadPoolExecutor(max_workers=6)` pool, evaluating all permutation loops concurrently in memory.
+6. **LiteSVM On-Chain Verification:** Opportunities identified in live memory are validated by instantiating LiteSVM and testing swap transactions directly against compiled BPF binaries in `fixtures/contracts/`.
 
-#### Engine 2: `live_arbitrage_monitor.py` (Real-Time Disparity & Latency Simulation)
-1. **Live State Extraction:** Connects to Solana Mainnet JSON-RPC every 500 ms to sample live 64-bit token reserves from Raydium's `coin_vault` and `pc_vault` (offsets `64..72`), alongside the Q64.64 fixed-point square-root price from Orca's Whirlpool account (offsets `65..81`).
-2. **Divergence Detection:** Calculates spot prices across both AMMs simultaneously. When the absolute price spread exceeds a defined threshold (0.03%), an arbitrage execution candidate is registered at Slot T0.
-3. **Network Latency Simulation:** Enforces a deterministic propagation delay (400 ms) representing in-flight network transit, validator mempool queuing, and slot leadership handoff.
-4. **On-Chain Execution & Slippage Reversion:** Re-queries the live state at Slot T1, hydrates an isolated LiteSVM instance, and executes the trade against real BPF bytecode. If other traders on Mainnet shifted the pool balance during the 400 ms window such that minimum output was breached, the compiled contract triggers an on-chain program error (`Custom(30): Exceeded desired slippage limit`) and reverts the transaction with zero capital loss.
+#### Engine 2: `circular_arbitrage.py` (Two-Way Circular Spatial Arbitrage Engine)
+1. **Closed-Loop Invariant:** Evaluates closed 2-way cycles (`SOL -> SOL` and `USDC -> USDC`) between Raydium V4 and Orca Whirlpools across 4 circular paths.
+2. **Parallel Concurrency:** Dispatches all four circular routes into a `concurrent.futures.ThreadPoolExecutor(max_workers=4)` every 100 ms.
+3. **Exact Fee & Concentrated Liquidity Math:** Evaluates Raydium 25 bps fees and Orca 4 bps fees (~29 bps round-trip friction threshold).
+4. **Anchor IDL & Dual-DEX LiteSVM Execution:** Constructs instruction payloads using Anchor selector `0xf8c69e91e17587c8` executing against `raydium_amm.so` and `whirlpool.so`.
+
+#### Engine 3: `live_arbitrage_monitor.py` (Real-Time Disparity & Latency Simulation)
+1. **Live State Extraction:** Connects to Solana Mainnet JSON-RPC to sample live token reserves from Raydium and square-root prices from Orca.
+2. **Divergence Detection:** Calculates spot prices across both AMMs simultaneously, flagging divergences exceeding 0.03%.
+3. **Network Latency Simulation:** Enforces a deterministic propagation delay (400 ms) representing in-flight transit, mempool queuing, and slot leadership handoff.
+4. **On-Chain Execution & Slippage Reversion:** Hydrates LiteSVM with live state at Slot T1. If state changes violate the minimum output, the compiled bytecode aborts with `Custom(30)` (slippage exceeded) with zero capital loss.
 
 ---
 
@@ -114,46 +133,33 @@ fixtures/
 
 ## Visuals
 
-### Two-Way Circular Arbitrage Cycle Routing
+### Multi-Market Multi-Token Circular Route Topology
 
 ```mermaid
 graph TD
-    StartSOL[Starting Capital: SOL] --> R1[Route 1: Raydium to Orca]
-    StartSOL --> R2[Route 2: Orca to Raydium]
-    R1 --> Swap1A[Leg 1: Sell SOL on Raydium for USDC]
-    Swap1A --> Swap1B[Leg 2: Buy SOL on Orca with USDC]
-    Swap1B --> EndSOL1[Ending Capital: SOL + Net Profit]
-    R2 --> Swap2A[Leg 1: Sell SOL on Orca for USDC]
-    Swap2A --> Swap2B[Leg 2: Buy SOL on Raydium with USDC]
-    Swap2B --> EndSOL2[Ending Capital: SOL + Net Profit]
-
-    StartUSDC[Starting Capital: USDC] --> R3[Route 3: Raydium to Orca]
-    StartUSDC --> R4[Route 4: Orca to Raydium]
-    R3 --> Swap3A[Leg 1: Buy SOL on Raydium with USDC]
-    Swap3A --> Swap3B[Leg 2: Sell SOL on Orca for USDC]
-    Swap3B --> EndUSDC1[Ending Capital: USDC + Net Profit]
-    R4 --> Swap4A[Leg 1: Buy SOL on Orca with USDC]
-    Swap4A --> Swap4B[Leg 2: Sell SOL on Raydium with USDC]
-    Swap4B --> EndUSDC2[Ending Capital: USDC + Net Profit]
+    StartSOL[Starting Capital: SOL] --> SpatialRoute[2-Hop Spatial Route]
+    StartSOL --> TriangularRoute[3-Hop Triangular Route]
+    SpatialRoute --> Leg1A[Leg 1: Sell SOL on Raydium V4 for USDC]
+    Leg1A --> Leg2A[Leg 2: Buy SOL on Orca Whirlpool with USDC]
+    Leg2A --> EndSOL1[Ending Capital: SOL + Net Profit]
+    TriangularRoute --> Tri1[Hop 1: Swap SOL to BONK on Raydium CLMM]
+    Tri1 --> Tri2[Hop 2: Swap BONK to USDC on Meteora DLMM]
+    Tri2 --> Tri3[Hop 3: Swap USDC back to SOL on Orca]
+    Tri3 --> EndSOL2[Ending Capital: SOL + Net Profit]
 ```
 
-### Multithreaded Concurrency & LiteSVM Execution Flow
+### Optimal Trade Sizing Calculus & Concurrency Pipeline
 
 ```mermaid
 graph TD
-    RPC[Solana Mainnet JSON-RPC] -->|Live Token Reserves| Monitor[Live State Sampler]
-    Monitor -->|100ms Interval| Dispatcher[ThreadPoolExecutor: 4 Workers]
-    Dispatcher -->|Thread 1| Worker1[Route 1: SOL Raydium to Orca]
-    Dispatcher -->|Thread 2| Worker2[Route 2: SOL Orca to Raydium]
-    Dispatcher -->|Thread 3| Worker3[Route 3: USDC Raydium to Orca]
-    Dispatcher -->|Thread 4| Worker4[Route 4: USDC Orca to Raydium]
-    Worker1 -->|Spread GT 29 bps| VM[Isolated LiteSVM Instance]
-    Worker2 -->|Spread GT 29 bps| VM
-    Worker3 -->|Spread GT 29 bps| VM
-    Worker4 -->|Spread GT 29 bps| VM
-    VM -->|Load BPF| RaydiumProg[fixtures/contracts/raydium_amm.so]
-    VM -->|Load BPF| OrcaProg[fixtures/contracts/whirlpool.so]
-    VM -->|Execute Leg 1 and 2| Result[Atomic Settlement or Revert]
+    RPC[Live Solana Mainnet RPC] --> Poller[Batch State Sampler]
+    Poller --> Workers[ThreadPoolExecutor: 6 Parallel Workers]
+    Workers --> Sizer[Calculus Sizer: dPi/dx = 0]
+    Sizer --> SizerCheck[Optimal Size: xStar and Zero-Profit Ceiling: 2xStar]
+    SizerCheck --> MinCap[Cap to Available Wallet Stock]
+    MinCap --> VM[Isolated LiteSVM Sandbox]
+    VM --> Execute[Execute Swaps Against BPF Bytecode]
+    Execute --> Result[Settlement: Positive Net Yield or Revert]
 ```
 
 ---
@@ -178,7 +184,50 @@ pip show solders
 
 Each script runs out-of-the-box with **zero required arguments**:
 
-### 1. Execute Multithreaded Circular Arbitrage Engine
+### 1. Execute Multi-Market Multi-Token Arbitrage & Sizing Engine
+
+Activate the environment:
+```bash
+source ~/solana_env/bin/activate
+```
+
+Navigate to repository root:
+```bash
+cd scorpion_iinternship_project
+```
+
+Run with zero arguments (runs 10 clean verification iterations and exits cleanly):
+```bash
+python early-code/multi_market_arbitrage.py
+```
+
+Run in continuous monitoring mode:
+```bash
+python early-code/multi_market_arbitrage.py --continuous
+```
+
+**Expected Terminal Output:**
+```text
+======================================================================================
+ Multi-Market, Multi-Token Circular Arbitrage & Optimal Sizing Engine
+ Protocols:  Raydium V4, Orca Whirlpools, Raydium CLMM, Meteora DLMM
+ Invariant:  Strictly Circular (SOL->SOL & USDC->USDC)
+ Concurrency: ThreadPoolExecutor(max_workers=6) parallel search
+ Wallet:     5.00 SOL | 500.00 USDC (Stock Capped)
+ Signer:     GzdXR3tkDMgjVvzVCXj1YvCqW6VnSGSrk4wJ3Sn6LqNt
+======================================================================================
+Time      Slot        Venues Sampled     Best Route                   Optimal Size   Net Gain
+--------------------------------------------------------------------------------------
+06:38:13  455554812   4 DEX Pools       Spatial SOL (CLMM->Meteora   0.0000 SOL     +0.0000 SOL
+06:38:15  455554820   4 DEX Pools       Spatial USDC (Raydium->Orc   0.0000 USDC    +0.0000 USDC
+06:38:16  455554825   4 DEX Pools       Triangular SOL->BONK->USDC   0.0000 SOL     +0.0000 SOL
+======================================================================================
+ Simulation completed 10 clean iterations successfully with exit code 0.
+```
+
+---
+
+### 2. Execute Two-Way Circular Arbitrage Engine
 
 Activate the environment:
 ```bash
@@ -200,25 +249,9 @@ Run in continuous real-time monitoring mode (100 ms interval):
 python early-code/circular_arbitrage.py --continuous
 ```
 
-**Expected Terminal Output:**
-```text
-================================================================================
- Two-Way Circular Arbitrage Monitor (SOL<->SOL & USDC<->USDC)
- Polling Interval:  100 ms
- Trade Quantities:  1.00 SOL | 120.00 USDC
- Minimum Profit:    >0.0000 token gain to trigger
- Signer Keypair:    GzdXR3tkDMgjVvzVCXj1YvCqW6VnSGSrk4wJ3Sn6LqNt
-================================================================================
-Time      Slot        Raydium ($)   Orca ($)      Best Path              Net Profit
---------------------------------------------------------------------------------
-19:58:34  454323211   115.8679      115.8162      SOL via RAYDIUM_THEN_ORCA -0.0025 SOL (-0.246%)
-19:58:35  454323218   115.8667      115.8162      SOL via RAYDIUM_THEN_ORCA -0.0025 SOL (-0.247%)
-19:58:36  454323221   115.8667      115.8162      SOL via RAYDIUM_THEN_ORCA -0.0025 SOL (-0.247%)
-```
-
 ---
 
-### 2. Execute Real-Time Live Arbitrage & Latency Monitor
+### 3. Execute Real-Time Live Arbitrage & Latency Monitor
 
 Activate the environment:
 ```bash
@@ -240,27 +273,6 @@ Run in continuous mode:
 python early-code/live_arbitrage_monitor.py --continuous
 ```
 
-**Expected Terminal Output:**
-```text
-============================================================================
- Solana Mainnet Multi-Market Arbitrage & LiteSVM Execution Monitor
- Polling Interval:  500 ms
- Trigger Threshold: 0.030% spread
- Trade Amount:      1.00 SOL
- Signer Keypair:    GzdXR3tkDMgjVvzVCXj1YvCqW6VnSGSrk4wJ3Sn6LqNt
-============================================================================
-Time         Slot        Raydium ($)    Orca ($)       Spread ($)   Status
-----------------------------------------------------------------------------
-19:58:38     454323229   115.8667       115.8162       0.0504       ⚡ DIVERGENCE (0.04%)
-
-────────────────────────────────────────────────────────────────────────────
-[*] Price spread exceeded threshold! Testing trade in LiteSVM for 1.00 SOL...
-  [+] Execution Status: Swap successfully confirmed on LiteSVM against live market state.
-  [+] Received Output:  115.5238 USDC
-  [+] Compute Units:    18,553 CUs
-────────────────────────────────────────────────────────────────────────────
-```
-
 ---
 
 ## Support
@@ -271,8 +283,10 @@ For technical inquiries regarding pool state layouts, BPF bytecode loaders, or L
 
 ## Roadmap
 
+- [x] **Multi-Market Multi-Token Arbitrage Engine:** Multi-venue coverage across Raydium V4, Orca Whirlpools, Raydium CLMM, and Meteora DLMM with `SOL`, `USDC`, `BONK`, and `JitoSOL`.
+- [x] **Calculus-Based Optimal Sizing & Zero-Profit Ceiling:** Mathematical computation of $x^*$ peak yield and $2x^*$ zero-profit boundary capped at wallet stock.
+- [x] **Parallel Multithreaded Evaluation:** Concurrent route discovery via `ThreadPoolExecutor(max_workers=6)`.
 - [x] **Two-Way Circular Spatial Arbitrage Engine:** Closed-loop `SOL -> SOL` and `USDC -> USDC` routes eliminating directional exposure.
-- [x] **Multithreaded Parallel Route Evaluation:** 4 concurrent CPU workers evaluating routes at 100 ms frequency.
 - [x] **Live Dual-Market Monitoring & Latency Simulation:** Dynamic price sampling against Raydium and Orca with 400 ms latency simulation.
 - [x] **On-Chain Slippage Enforcement in LiteSVM:** Bytecode execution against `raydium_amm.so` and `whirlpool.so` with smart contract revert handling.
 - [x] **Structured Fixture Organization:** Categorized `fixtures/contracts/` and `fixtures/accounts/` directories with metadata manifest.
@@ -303,4 +317,4 @@ Internal educational project for internship evaluation.
 
 ## Project status
 
-Active development on branch `feat/circular-arbitrage`. Two-way circular arbitrage and live latency simulation engines are implemented, verified in LiteSVM with exit code 0, and ready for review.
+Active development on branch `feat/circular-arbitrage`. Multi-market multi-token circular arbitrage engine, calculus-based optimal trade sizing, and latency simulation harness are implemented, verified in LiteSVM with exit code 0, and ready for review.
