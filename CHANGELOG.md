@@ -6,8 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
-
 ### Added
 - **Step 1:** Completed market research on Solana trading venues: JTX (Jito MEV/bundle), Orca Whirlpools (CLMM), Phoenix (CLOB), and Raydium.
 - **Step 2:** Documented market selection rationale in `early-code/MARKET_SELECTION.md` choosing **Orca Whirlpools** as the primary focus for LiteSVM simulation.
