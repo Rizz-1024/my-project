@@ -308,3 +308,5 @@ This repository follows a structured sprint workflow:
 ## Project status
 
 Active development across sprint branches — Step 4 (Direct On-Chain Raydium Simulation) complete; Step 5 (Multi-Market Arbitrage) in preparation.
+# Internship_Project_Sep_2026
+Working as a new candidate for solana development 
