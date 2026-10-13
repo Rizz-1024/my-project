@@ -82,6 +82,25 @@ graph TD
 
 ## Installation
 
+ Multi-Market, Multi-Token Circular Arbitrage & Optimal Sizing Engine
+ Protocols:  Raydium V4, Orca Whirlpools, Raydium CLMM, Meteora DLMM
+ Invariant:  Strictly Circular (SOL->SOL & USDC->USDC)
+ Concurrency: ThreadPoolExecutor(max_workers=6) parallel search
+ Wallet:     5.00 SOL | 500.00 USDC (Stock Capped)
+ Signer:     GzdXR3tkDMgjVvzVCXj1YvCqW6VnSGSrk4wJ3Sn6LqNt
+Time      Slot        Venues Sampled     Best Route                   Optimal Size   Net Gain
+--------------------------------------------------------------------------------------
+06:38:13  455554812   4 DEX Pools       Spatial SOL (CLMM->Meteora   0.0000 SOL     +0.0000 SOL
+06:38:15  455554820   4 DEX Pools       Spatial USDC (Raydium->Orc   0.0000 USDC    +0.0000 USDC
+06:38:16  455554825   4 DEX Pools       Triangular SOL->BONK->USDC   0.0000 SOL     +0.0000 SOL
+ Simulation completed 10 clean iterations successfully with exit code 0.
+```
+
+---
+
+### 2. Execute Two-Way Circular Arbitrage Engine
+
+Activate the environment:
 ### Prerequisites & System Packages
 Updates package repositories and installs fundamental Linux build utilities, C/C++ compilers, linkers, LLVM toolchains, and SSL cryptographic headers required to compile Rust crates and Solana binaries:
 
